@@ -255,9 +255,25 @@ class Request(HTTPConnection[StateT]):
     async def body(self) -> bytes:
         if not hasattr(self, "_body"):
             chunks: list[bytes] = []
-            async with aclosing(self.stream()) as stream:
-                async for chunk in stream:
-                    chunks.append(chunk)
+            if type(self).stream is _request_stream and "stream" not in self.__dict__:
+                # Same loop as `stream()`, without creating an async generator.
+                if self._stream_consumed:
+                    raise RuntimeError("Stream consumed")
+                while not self._stream_consumed:
+                    message = await self._receive()
+                    if message["type"] == "http.request":
+                        body = message.get("body", b"")
+                        if not message.get("more_body", False):
+                            self._stream_consumed = True
+                        if body:
+                            chunks.append(body)
+                    elif message["type"] == "http.disconnect":  # pragma: no branch
+                        self._is_disconnected = True
+                        raise ClientDisconnect()
+            else:
+                async with aclosing(self.stream()) as stream:
+                    async for chunk in stream:
+                        chunks.append(chunk)
             self._body = b"".join(chunks)
         return self._body
 
@@ -355,3 +371,7 @@ class Request(HTTPConnection[StateT]):
         if "http.response.early_hint" in self.scope.get("extensions", {}):
             raw_links = [value.encode("latin-1") for value in (link, *additional_links)]
             await self._send({"type": "http.response.early_hint", "links": raw_links})
+
+
+# Used by `body()` instead of `Request.stream`, so a replaced `Request.stream` keeps the generator path.
+_request_stream = Request.stream

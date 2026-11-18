@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -631,6 +631,26 @@ async def test_request_rcv(messages: list[Message]) -> None:
     body = await request.body()
 
     assert body == b"123"
+
+
+@pytest.mark.anyio
+async def test_request_body_uses_overridden_stream() -> None:
+    async def rcv() -> Message:
+        return {"type": "http.request", "body": b"abc"}
+
+    async def uppercase(request: Request) -> AsyncGenerator[bytes, None]:
+        async for chunk in Request.stream(request):
+            yield chunk.upper()
+
+    class UppercaseRequest(Request):
+        def stream(self) -> AsyncGenerator[bytes, None]:
+            return uppercase(self)
+
+    assert await UppercaseRequest({"type": "http"}, rcv).body() == b"ABC"
+
+    request = Request({"type": "http"}, rcv)
+    request.stream = lambda: uppercase(request)  # type: ignore[method-assign]
+    assert await request.body() == b"ABC"
 
 
 @pytest.mark.anyio
