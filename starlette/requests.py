@@ -257,7 +257,9 @@ class Request(HTTPConnection[StateT]):
             chunks: list[bytes] = []
             async with aclosing(self.stream()) as stream:
                 async for chunk in stream:
-                    chunks.append(chunk)
+                    # Without the final empty chunk, `b"".join()` returns a single chunk without copying it.
+                    if chunk:
+                        chunks.append(chunk)
             self._body = b"".join(chunks)
         return self._body
 
